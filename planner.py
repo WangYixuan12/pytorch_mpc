@@ -40,11 +40,11 @@ class Planner(object):
         # - action_lower_lim:
         #   - description: the lower limit of the action
         #   - shape: [action_dim]
-        #   - type: np.ndarray
+        #   - type: torch tensor
         # - action_upper_lim: the upper limit of the action
         #   - description: the upper limit of the action
         #   - shape: [action_dim]
-        #   - type: np.ndarray
+        #   - type: torch tensor
         # - planner_type: the type of the planner (options: 'GD', 'MPPI', 'MPPI_GD')
         self.config = config
         self.action_dim = config['action_dim']
@@ -61,16 +61,16 @@ class Planner(object):
         assert self.planner_type in ['GD', 'MPPI', 'MPPI_GD']
         assert self.action_lower_lim.shape == (self.action_dim,)
         assert self.action_upper_lim.shape == (self.action_dim,)
-        assert type(self.action_lower_lim) == np.ndarray
-        assert type(self.action_upper_lim) == np.ndarray
+        assert type(self.action_lower_lim) == torch.Tensor
+        assert type(self.action_upper_lim) == torch.Tensor
         
         # OPTIONAL
         # - device: 'cpu' or 'cuda', default: 'cuda'
         # - verbose: True or False, default: False
         # - sampling_action_seq_fn:
         #   - description: the function to sample the action sequence
-        #   - input: init_act_seq (shape: [n_look_ahead, action_dim] numpy array)
-        #   - output: act_seqs (shape: [n_sample, n_look_ahead, action_dim] numpy array)
+        #   - input: init_act_seq (shape: [n_look_ahead, action_dim] torch tensor)
+        #   - output: act_seqs (shape: [n_sample, n_look_ahead, action_dim] torch tensor)
         #   - default: sample action sequences from a normal distribution
         # - noise_type: the type of the noise (options: 'normal'), default: 'normal'
         # - noise_level: the level of the noise, default: 0.1
@@ -84,9 +84,6 @@ class Planner(object):
         self.noise_level = config['noise_level'] if 'noise_level' in config else 0.1
         self.n_his = config['n_his'] if 'n_his' in config else 1
         self.rollout_best = config['rollout_best'] if 'rollout_best' in config else True
-        
-        self.action_lower_lim_tensor = torch.tensor(self.action_lower_lim, dtype=torch.float32, device=self.device)
-        self.action_upper_lim_tensor = torch.tensor(self.action_upper_lim, dtype=torch.float32, device=self.device)
 
     def sample_action_sequences_default(self, act_seq):
         # init_act_seq: shape: [n_look_ahead, action_dim] torch tensor
@@ -100,12 +97,12 @@ class Planner(object):
         act_seqs = torch.stack([act_seq.clone()] * self.n_sample)
 
         # [n_sample, action_dim]
-        act_residual = torch.zeros((self.n_sample, self.action_dim), dtype=act_seqs.dtype, device=act_seqs.device)
+        act_residual = torch.zeros((self.n_sample, self.action_dim), dtype=act_seqs.dtype, device=self.device)
 
         # actions that go as input to the dynamics network
         for i in range(self.n_look_ahead):
             if self.noise_type == "normal":
-                noise_sample = torch.normal(0, self.noise_level, (self.n_sample, self.action_dim))
+                noise_sample = torch.normal(0, self.noise_level, (self.n_sample, self.action_dim), device=self.device)
             else:
                 raise ValueError("unknown noise type: %s" %(self.noise_type))
 
@@ -116,8 +113,8 @@ class Planner(object):
 
             # clip to range
             act_seqs[:, i] = torch.clamp(act_seqs[:, i],
-                                         self.action_lower_lim_tensor,
-                                         self.action_upper_lim_tensor)
+                                         self.action_lower_lim,
+                                         self.action_upper_lim)
 
         assert act_seqs.shape == (self.n_sample, self.n_look_ahead, self.action_dim)
         assert type(act_seqs) == torch.Tensor
@@ -140,19 +137,19 @@ class Planner(object):
 
     def trajectory_optimization(self, state_cur, act_seq):
         # input:
-        # - state_cur: current state, shape: [n_his, state_dim] numpy array
-        # - act_seq: initial action sequence, shape: [n_look_ahead, action_dim] numpy array
+        # - state_cur: current state, shape: [n_his, state_dim] torch tensor
+        # - act_seq: initial action sequence, shape: [n_look_ahead, action_dim] torch tensor
         # output:
         # - a dictionary with the following keys:
-        #   - 'act_seq': optimized action sequence, shape: [n_look_ahead, action_dim] numpy array
+        #   - 'act_seq': optimized action sequence, shape: [n_look_ahead, action_dim] torch tensor
         #   - 'model_outputs' if verbose is True, otherwise None, might be useful for debugging
         #   - 'eval_outputs' if verbose is True, otherwise None, might be useful for debugging
         #   - 'best_model_output' if rollout_best is True, otherwise None, might be useful for debugging
         #   - 'best_eval_output' if rollout_best is True, otherwise None, might be useful for debugging
         assert state_cur.shape == (self.n_his, self.state_dim)
-        assert type(state_cur) == np.ndarray
+        assert type(state_cur) == torch.Tensor
         assert act_seq.shape == (self.n_look_ahead, self.action_dim)
-        assert type(act_seq) == np.ndarray
+        assert type(act_seq) == torch.Tensor
         if self.planner_type == 'MPPI':
             return self.trajectory_optimization_mppi(state_cur, act_seq)
         elif self.planner_type == 'GD' or self.planner_type == 'MPPI_GD':
@@ -161,7 +158,7 @@ class Planner(object):
             raise ValueError("unknown planner type: %s" %(self.planner_type))
     
     def optimize_action_mppi(self, act_seqs, reward_seqs):
-        return torch.sum(act_seqs * F.softmax(reward_seqs * self.reward_weight).unsqueeze(-1).unsqueeze(-1), dim=0)
+        return torch.sum(act_seqs * F.softmax(reward_seqs * self.reward_weight, dim=0).unsqueeze(-1).unsqueeze(-1), dim=0)
     
     def optimize_action_gd(self, act_seqs, reward_seqs):
         pass
@@ -170,32 +167,30 @@ class Planner(object):
         pass
     
     def trajectory_optimization_mppi(self, state_cur, act_seq):
-        state_cur_tensor = torch.tensor(state_cur, device=self.device, dtype=torch.float)
-        act_seq_tensor = torch.tensor(act_seq, device=self.device, dtype=torch.float)
         if self.verbose:
             model_outputs = []
             eval_outputs = []
         for i in range(self.n_update_iter):
             with torch.no_grad():
-                act_seqs_tensor = self.sample_action_sequences(act_seq_tensor)
-                assert act_seqs_tensor.shape == (self.n_sample, self.n_look_ahead, self.action_dim)
-                assert type(act_seqs_tensor) == torch.Tensor
-                model_out = self.model_rollout(state_cur_tensor, act_seqs_tensor)
-                state_seqs_tensor = model_out['state_seqs']
-                assert state_seqs_tensor.shape == (self.n_sample, self.n_look_ahead, self.state_dim)
-                assert type(state_seqs_tensor) == torch.Tensor
-                eval_out = self.evaluate_traj(state_seqs_tensor, act_seqs_tensor)
-                reward_seqs_tensor = eval_out['reward_seqs']
-                act_seq_tensor = self.optimize_action(act_seqs_tensor, reward_seqs_tensor)
+                act_seqs = self.sample_action_sequences(act_seq)
+                assert act_seqs.shape == (self.n_sample, self.n_look_ahead, self.action_dim)
+                assert type(act_seqs) == torch.Tensor
+                model_out = self.model_rollout(state_cur, act_seqs)
+                state_seqs = model_out['state_seqs']
+                assert state_seqs.shape == (self.n_sample, self.n_look_ahead, self.state_dim)
+                assert type(state_seqs) == torch.Tensor
+                eval_out = self.evaluate_traj(state_seqs, act_seqs)
+                reward_seqs = eval_out['reward_seqs']
+                act_seq = self.optimize_action(act_seqs, reward_seqs)
                 if self.verbose:
                     model_outputs.append(model_out)
                     eval_outputs.append(eval_out)
 
         if self.rollout_best:
-            best_model_out = self.model_rollout(state_cur_tensor, act_seq_tensor.unsqueeze(0))
-            best_eval_out = self.evaluate_traj(best_model_out['state_seqs'], act_seq_tensor.unsqueeze(0))
+            best_model_out = self.model_rollout(state_cur, act_seq.unsqueeze(0))
+            best_eval_out = self.evaluate_traj(best_model_out['state_seqs'], act_seq.unsqueeze(0))
                 
-        return {'act_seq': act_seq_tensor.cpu().numpy(),
+        return {'act_seq': act_seq,
                 'model_outputs': model_outputs if self.verbose else None,
                 'eval_outputs': eval_outputs if self.verbose else None,
                 'best_model_output': best_model_out if self.rollout_best else None,
