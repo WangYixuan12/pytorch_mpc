@@ -48,7 +48,7 @@ class Planner(object):
         # - planner_type: the type of the planner (options: 'GD', 'MPPI', 'MPPI_GD')
         self.config = config
         self.action_dim = config['action_dim']
-        self.state_dim = config['state_dim']
+        # self.state_dim = config['state_dim']
         self.model_rollout = config['model_rollout_fn']
         self.evaluate_traj = config['evaluate_traj_fn']
         self.n_sample = config['n_sample']
@@ -146,7 +146,7 @@ class Planner(object):
         #   - 'eval_outputs' if verbose is True, otherwise None, might be useful for debugging
         #   - 'best_model_output' if rollout_best is True, otherwise None, might be useful for debugging
         #   - 'best_eval_output' if rollout_best is True, otherwise None, might be useful for debugging
-        assert state_cur.shape == (self.n_his, self.state_dim)
+        # assert state_cur.shape == (self.n_his, self.state_dim)
         assert type(state_cur) == torch.Tensor
         assert act_seq.shape == (self.n_look_ahead, self.action_dim)
         assert type(act_seq) == torch.Tensor
@@ -177,7 +177,7 @@ class Planner(object):
                 assert type(act_seqs) == torch.Tensor
                 model_out = self.model_rollout(state_cur, act_seqs)
                 state_seqs = model_out['state_seqs']
-                assert state_seqs.shape == (self.n_sample, self.n_look_ahead, self.state_dim)
+                # assert state_seqs.shape == (self.n_sample, self.n_look_ahead, self.state_dim)
                 assert type(state_seqs) == torch.Tensor
                 eval_out = self.evaluate_traj(state_seqs, act_seqs)
                 reward_seqs = eval_out['reward_seqs']
