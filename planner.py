@@ -11,9 +11,9 @@ torch.autograd.set_detect_anomaly(True)
 # - Plot reward vs. iteration to see the convergence of the planner
 
 
-def fps_np(pcd, particle_num, init_idx=-1):
+def fps_np(pcd, num, init_idx=-1):
     # pcd: (n, c) numpy array
-    # pcd_fps: (particle_num, c) numpy array
+    # pcd_fps: (num, c) numpy array
     # radius: float
     n, c = pcd.shape
     fps_idx = []
@@ -28,7 +28,7 @@ def fps_np(pcd, particle_num, init_idx=-1):
     fps_idx.append(rand_idx)
     pcd_fps_lst = [pcd[rand_idx]]
     dist = np.linalg.norm(pcd - pcd_fps_lst[0], axis=1)
-    while len(pcd_fps_lst) < particle_num:
+    while len(pcd_fps_lst) < num:
         fps_idx.append(dist.argmax())
         pcd_fps_lst.append(pcd[dist.argmax()])
         dist = np.minimum(dist, np.linalg.norm(pcd - pcd_fps_lst[-1], axis=1))
@@ -217,7 +217,6 @@ class Planner(object):
             print('act_seqs.grad:', act_seqs.grad)
             exit()
         optimizer.step()
-        act_seqs = self.clip_actions(act_seqs)
     
     def optimize_action_mppi_gd(self, act_seqs, reward_seqs):
         pass
@@ -225,9 +224,7 @@ class Planner(object):
     def clip_actions(self, act_seqs):
         # act_seqs: shape: [**dim, action_dim] torch tensor
         # return: shape: [**dim, action_dim] torch tensor
-        act_seqs = torch.clamp(act_seqs,
-                               self.action_lower_lim,
-                               self.action_upper_lim)
+        act_seqs.data.clamp_(self.action_lower_lim, self.action_upper_lim)
         return act_seqs
     
     def trajectory_optimization_mppi(self, state_cur, act_seq):
@@ -274,6 +271,7 @@ class Planner(object):
             eval_out = self.evaluate_traj(state_seqs, act_seqs)
             reward_seqs = eval_out['reward_seqs'] # (n_sample)
             self.optimize_action(act_seqs, reward_seqs, optimizer)
+            self.clip_actions(act_seqs)
             if self.verbose:
                 model_outputs.append(model_out)
                 eval_outputs.append(eval_out)
