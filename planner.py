@@ -225,6 +225,13 @@ class Planner(object):
         # act_seqs: shape: [**dim, action_dim] torch tensor
         # return: shape: [**dim, action_dim] torch tensor
         act_seqs.data.clamp_(self.action_lower_lim, self.action_upper_lim)
+        
+        # NOTE: only for Yixuan's project
+        act_max_len = 0.2
+        curr_len = torch.norm(act_seqs[..., 2:] - act_seqs[..., :-2], dim=-1)
+        act_dir = (act_seqs[..., 2:] - act_seqs[..., :-2]) / curr_len.unsqueeze(-1)
+        max_len = torch.clamp(curr_len, max=act_max_len).unsqueeze(-1)
+        act_seqs = torch.cat([act_seqs[..., :2], act_seqs[..., :2] + max_len * act_dir], dim=-1)
         return act_seqs
     
     def trajectory_optimization_mppi(self, state_cur, act_seq):
@@ -263,6 +270,7 @@ class Planner(object):
             model_outputs = []
             eval_outputs = []
         for i in range(self.n_update_iter):
+            torch.cuda.empty_cache()
             assert act_seqs.shape == (self.n_sample, self.n_look_ahead, self.action_dim)
             assert type(act_seqs) == torch.Tensor
             model_out = self.model_rollout(state_cur, act_seqs)
@@ -273,8 +281,29 @@ class Planner(object):
             self.optimize_action(act_seqs, reward_seqs, optimizer)
             self.clip_actions(act_seqs)
             if self.verbose:
-                model_outputs.append(model_out)
-                eval_outputs.append(eval_out)
+                model_out_detach = {}
+                for k, v in model_out.items():
+                    if type(v) == torch.Tensor:
+                        model_out_detach[k] = v.detach().cpu().numpy()
+                    else:
+                        model_out_detach[k] = v
+                eval_out_detach = {}
+                for k, v in eval_out.items():
+                    if type(v) == torch.Tensor:
+                        eval_out_detach[k] = v.detach().cpu().numpy()
+                    else:
+                        eval_out_detach[k] = v
+                model_outputs.append(model_out_detach)
+                eval_outputs.append(eval_out_detach)
+                
+            # clean up GPU memory
+            for k, v in model_out.items():
+                del v
+            for k, v in eval_out.items():
+                del v
+            del model_out, state_seqs, eval_out
+            if i < self.n_update_iter - 1:
+                del reward_seqs
         act_seq = act_seqs[torch.argmax(reward_seqs)]
         
         if self.rollout_best:
